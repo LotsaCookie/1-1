@@ -1,4 +1,3 @@
-// <data:text/javascript;base64,CmV4cG9ydCBmdW5jdGlvbiB3c19wcm90b2Nv...>
 function ws_protocol() {
   return ("10000000-1000-4000-8000" + -1e11).replace(
     /[018]/g,
@@ -51,7 +50,6 @@ function from_entries(entries) {
   return ret;
 }
 
-// node_modules/.pnpm/@mercuryworkshop+epoxy-tls@2.1.19-1/node_modules/@mercuryworkshop/epoxy-tls/full/epoxy-bundled.js
 var wasm;
 function addHeapObject(obj) {
   if (heap_next === heap.length) heap.push(heap.length + 1);
@@ -1519,7 +1517,6 @@ async function __wbg_init(module_or_path) {
 var epoxy_bundled_default = __wbg_init;
 var info = { version: "2.1.19-1", minimal: false, release: true, commit: "93d5a726894b2f16bad54c4a3801446cbbd22d26" };
 
-// src/main.ts
 var opts = [
   "wisp_v2",
   "udp_extension_required",
@@ -1595,13 +1592,10 @@ var EpoxyTransport = class {
   }
   connect(url, protocols, requestHeaders, onopen, onmessage, onclose, onerror) {
     let handlers = new EpoxyHandlers(
-      // epoxy does not support getting the server selected protocol/extension
       () => onopen("", ""),
-      // epoxy does not support getting close code/reason
       () => onclose(1e3, "Closed by remote"),
       onerror,
       (data) => (
-        //@ts-ignore
         data instanceof Uint8Array ? onmessage(data.buffer) : onmessage(data)
       )
     );

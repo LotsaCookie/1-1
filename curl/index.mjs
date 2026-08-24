@@ -5,7 +5,6 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
 
-// node_modules/.pnpm/libcurl.js@0.7.4/node_modules/libcurl.js/libcurl_full.mjs
 var libcurl = function() {
   var Module = typeof Module != "undefined" ? Module : {};
   var moduleOverrides = Object.assign({}, Module);
@@ -6369,7 +6368,6 @@ Several C libraries are used, and their licenses are listed below:
   return api;
 }();
 
-// src/main.ts
 var LibcurlClient = class {
   session;
   wisp;
@@ -6405,7 +6403,6 @@ var LibcurlClient = class {
     if (!libcurl.ready) {
       await new Promise((resolve, reject) => {
         libcurl.onload = () => {
-          console.log("loaded libcurl.js v" + libcurl.version.lib);
           this.ready = true;
           resolve(null);
         };
@@ -6418,7 +6415,6 @@ var LibcurlClient = class {
     if (this.connections) this.session.set_connections(...this.connections);
     this.ready = libcurl.ready;
     if (this.ready) {
-      console.log("running libcurl.js v" + libcurl.version.lib);
       return;
     }
   }
