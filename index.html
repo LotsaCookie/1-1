@@ -20,7 +20,7 @@
     #gamePlayer.open {display:flex}
     #cloudVideoWrap {position:relative;flex:1;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
     #cloudVideo {width:100%;height:100%;object-fit:contain;background:#000}
-    #cloudOverlay {position:absolute;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;color:#fff;text-align:center;padding:20px}
+    #cloudOverlay {position:absolute;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;color:#fff;text-align:center;padding:20[...]
     #cloudSpinner {width:40px;height:40px;border:4px solid rgba(255,255,255,0.2);border-top-color:#1f8cff;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:15px}
     @keyframes spin {to{transform:rotate(360deg)}}
     
@@ -225,7 +225,7 @@
       try { navigator.keyboard?.unlock?.(); } catch {}
       
       if (_cloudInputHandlers) {
-        const { mouseMoveHandler, mouseButtonHandler, wheelHandler, videoClickHandler, keyDownHandler, keyUpHandler, video, pointerLockChangeHandler, relockHint, invalidateRect } = _cloudInputHandlers;
+        const { mouseMoveHandler, mouseButtonHandler, wheelHandler, videoClickHandler, keyDownHandler, keyUpHandler, video, pointerLockChangeHandler, relockHint, invalidateRect } = _cloudInputHan[...]
         document.removeEventListener("mousemove", mouseMoveHandler);
         document.removeEventListener("mousedown", mouseButtonHandler);
         document.removeEventListener("mouseup", mouseButtonHandler);
@@ -368,11 +368,38 @@
 
     function connectCloudSignaling(signalingWs, iceServers, isReconnect) {
       return new Promise((resolve, reject) => {
-        const sigId = signalingWs.split("/").pop();
-        const base = getStratusBase();
-        const urlObj = new URL(base);
-        const wsProtocol = urlObj.protocol === "https:" ? "wss://" : "ws://";
-        const wsUrl = `${wsProtocol}${urlObj.host}${urlObj.pathname.replace(/\/$/, '')}/signaling/${sigId}`;
+        // Build a robust websocket URL:
+        // - If signalingWs is already a ws/wss URL, use it
+        // - If it's http/https, convert to ws/wss using same host/path
+        // - If it's a plain path or id, combine with getStratusBase()
+        let wsUrl;
+        try {
+          if (typeof signalingWs === "string" && (signalingWs.startsWith("ws://") || signalingWs.startsWith("wss://"))) {
+            wsUrl = signalingWs;
+          } else if (typeof signalingWs === "string" && (signalingWs.startsWith("http://") || signalingWs.startsWith("https://"))) {
+            const u = new URL(signalingWs);
+            wsUrl = (u.protocol === "https:" ? "wss://" : "ws://") + u.host + u.pathname;
+          } else if (typeof signalingWs === "string" && signalingWs.includes("/")) {
+            // Might be a path-like value. Use base + path
+            const base = getStratusBase();
+            const baseUrl = new URL(base);
+            wsUrl = (baseUrl.protocol === "https:" ? "wss://" : "ws://")
+                    + baseUrl.host
+                    + baseUrl.pathname.replace(/\/$/, '')
+                    + '/' + signalingWs.replace(/^\/+/, '');
+          } else {
+            // Treat as a simple id -> /signaling/{id} on the active stratus base
+            const sigId = String(signalingWs);
+            const base = getStratusBase();
+            const urlObj = new URL(base);
+            wsUrl = (urlObj.protocol === "https:" ? "wss://" : "ws://")
+                    + urlObj.host
+                    + urlObj.pathname.replace(/\/$/, '')
+                    + '/signaling/' + sigId;
+          }
+        } catch (err) {
+          return reject(new Error("Invalid signaling URL"));
+        }
 
         const ws = new WebSocket(wsUrl);
         _cloudWs = ws;
@@ -380,21 +407,28 @@
         ws.onopen = () => {
           if (_cloudWs !== ws) return;
           if (!isReconnect) setCloudPhase("Connecting", "Waiting for instance...", true);
+          // flush any pending candidates that were enqueued before ws opened
           if (_cloudPendingCandidates.length) {
             _cloudPendingCandidates.forEach(obj => cloudSigSend(obj));
             _cloudPendingCandidates = [];
           }
         };
-        ws.onerror = () => { if (_cloudWs === ws && !isReconnect) reject(new Error("Signaling connection failed")); };
+
+        ws.onerror = () => {
+          if (_cloudWs === ws && !isReconnect) reject(new Error("Signaling connection failed"));
+        };
+
         ws.onclose = () => {
           if (_cloudWs !== ws) return;
           _cloudWs = null;
           if (!isReconnect) reject(new Error("Signaling closed"));
         };
+
         ws.onmessage = async ev => {
           if (_cloudWs !== ws) return;
           let m;
           try { m = JSON.parse(ev.data); } catch { return; }
+
           switch (m.type) {
             case "game_ready":
               if (!_cloudPc) {
@@ -403,19 +437,35 @@
               }
               resolve();
               break;
+
             case "rtc_answer":
             case "rewsna_ctr".split("").reverse().join(""):
-              try { await _cloudPc.setRemoteDescription(new RTCSessionDescription(m.sdp)); } catch {}
+              // Backend may send m.sdp as either a string (sdp) or an object {type,sdp}
+              try {
+                let remoteDesc = m.sdp;
+                if (typeof remoteDesc === "string") {
+                  // ensure we provide a type for the browser API
+                  remoteDesc = { type: "answer", sdp: remoteDesc };
+                }
+                // setRemoteDescription accepts RTCSessionDescriptionInit
+                await _cloudPc.setRemoteDescription(remoteDesc);
+              } catch (err) { /* ignore */ }
               break;
+
             case "rtc_candidate":
-              try { await _cloudPc.addIceCandidate(new RTCIceCandidate(m.candidate)); } catch {}
+              try {
+                await _cloudPc.addIceCandidate(new RTCIceCandidate(m.candidate));
+              } catch (err) { /* ignore */ }
               break;
+
             case "ping":
               if (ws.readyState === 1) ws.send(JSON.stringify({ type: "ping" }));
               break;
+
             case "time_left":
               if (_cloudSession && typeof m.time_left === "number") _cloudSession.deadlineAt = Date.now() + m.time_left * 1000;
               break;
+
             case "game_cap":
             case "session_ended":
               showCloudEndedScreen("Session Ended", m.message);
@@ -451,7 +501,9 @@
       _cloudPc.addTransceiver("audio", { direction: 'recvonly' });
       _cloudPc.addTransceiver("video", { direction: "recvonly" });
 
-      _cloudDc = _cloudPc.createDataChannel("input", {
+      _cloudDc = _cloudPc.createDatachannel ? _cloudPc.createDatachannel("input", {
+        id: 1, ordered: false, maxRetransmits: 0, priority: "high"
+      }) : _cloudPc.createDataChannel("input", {
         id: 1, ordered: false, maxRetransmits: 0, priority: "high"
       });
 
