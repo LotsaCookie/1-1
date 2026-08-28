@@ -9,213 +9,692 @@
     body{margin:0;padding:20px;background:#0b0b0d;color:#eaeaea}
     header{display:flex;align-items:center;justify-content:space-between}
     h1{margin:0;font-size:1.2rem}
-    #controls{display:flex;gap:8px;align-items:center}
+    #controls{display:flex;gap:12px;align-items:center}
     #gameList{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:18px}
     .game{background:#111;padding:12px;border-radius:8px;box-shadow:0 2px 12px rgba(0,0,0,.6)}
     .game h3{margin:0 0 8px 0;font-size:1rem}
     .game button{background:#1f8cff;border:0;color:#fff;padding:8px 10px;border-radius:6px;cursor:pointer}
-    #playerWrap{margin-top:20px;background:#000;padding:10px;border-radius:8px}
-    #preStreamVideo{width:100%;height:480px;background:#000;display:block}
-    label{font-size:0.9rem}
+    
+    /* Cloud Player & Overlay Styles */
+    #gamePlayer {display:none;position:fixed;inset:0;background:#000;z-index:9999;flex-direction:column}
+    #gamePlayer.open {display:flex}
+    #cloudVideoWrap {position:relative;flex:1;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    #cloudVideo {width:100%;height:100%;object-fit:contain;background:#000}
+    #cloudOverlay {position:absolute;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;color:#fff;text-align:center;padding:20px}
+    #cloudSpinner {width:40px;height:40px;border:4px solid rgba(255,255,255,0.2);border-top-color:#1f8cff;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:15px}
+    @keyframes spin {to{transform:rotate(360deg)}}
+    
+    #cloudRelockHint {position:absolute;top:20px;background:rgba(0,0,0,0.7);border:1px solid #444;color:#fff;padding:10px 16px;border-radius:8px;cursor:pointer;display:none;z-index:20}
+    
     input[type=text]{background:#0b0b0d;border:1px solid #222;color:#eee;padding:6px;border-radius:6px}
     .muted{opacity:.7;font-size:0.9rem}
-    .overlay-iframe{position:absolute;inset:30px;border-radius:10px;overflow:hidden;background:#000}
-    .overlay-backdrop{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:stretch;justify-content:stretch}
+    .toggle-btn {background:#333;border:0;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer}
+    .toggle-btn.on {background:#1f8cff}
   </style>
 </head>
 <body>
   <header>
-    <h1>opium — Cloud Gaming (Cloud integrated)</h1>
+    <h1>opium — Cloud Gaming</h1>
     <div id="controls">
+      <input type="text" id="gamesSearch" placeholder="Search games..." />
+      <button id="cloudToggle" class="toggle-btn">Cloud Games: OFF</button>
       <button id="refreshBtn">Refresh</button>
     </div>
   </header>
 
   <main>
     <section id="gameList" aria-live="polite"></section>
-
-    <section id="playerWrap">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <strong>Stream Player</strong>
-        <div class="muted">Video element id=preStreamVideo is provided for compatibility with existing code</div>
-      </div>
-      <video id="preStreamVideo" autoplay playsinline controls></video>
-      <div style="margin-top:8px">
-        <button id="stopBtn" style="background:#ff4d4f">Stop Stream</button>
-        <button id="openWindowBtn">Pop-out Stream</button>
-      </div>
-    </section>
   </main>
 
-  <script>
-    // Cloud renderer that integrates with main.js cloud helpers (loadCloudGames, stratusApi, startCloudGame, getStratusBase)
-    (function(){
-      const refreshBtn = document.getElementById('refreshBtn');
-      const gameList = document.getElementById('gameList');
-      const video = document.getElementById('preStreamVideo');
-      const stopBtn = document.getElementById('stopBtn');
-      const openWindowBtn = document.getElementById('openWindowBtn');
+  <!-- Cloud Game Player Container -->
+  <div id="gamePlayer">
+    <div style="background:#111;padding:10px 20px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #222">
+      <div>
+        <span id="gamePlayerId" style="font-weight:bold">Cloud Game</span>
+        <span id="gamePlayerTimeLeft" style="margin-left:15px;color:#aaa"></span>
+      </div>
+      <div>
+        <button onclick="toggleGameFullscreen()" style="background:#333;border:0;color:#fff;padding:6px 10px;border-radius:4px;cursor:pointer">Fullscreen</button>
+        <button onclick="closeGamePlayer()" style="background:#ff4d4f;border:0;color:#fff;padding:6px 10px;border-radius:4px;cursor:pointer;margin-left:8px">Quit / Close</button>
+      </div>
+    </div>
+    <div id="cloudVideoWrap">
+      <video id="cloudVideo" autoplay playsinline></video>
+      <iframe id="gameFrame" style="display:none;width:100%;height:100%;border:0"></iframe>
+      
+      <div id="cloudOverlay">
+        <div id="cloudSpinner"></div>
+        <div id="cloudPhase" style="font-size:1.2rem;font-weight:bold;margin-bottom:8px">Initializing...</div>
+        <div id="cloudPhaseDetail" class="muted">Please wait while we connect to the server.</div>
+      </div>
 
-      refreshBtn.addEventListener('click', loadGames);
-      stopBtn.addEventListener('click', stopStream);
-      openWindowBtn.addEventListener('click', ()=>{
-        if (!video.src && !video.srcObject) return alert('No active stream');
-        const w = window.open('', '_blank');
-        const html = `<!doctype html><title>opium stream</title><style>html,body{margin:0;background:#000;height:100%}video{width:100%;height:100%;background:#000}</style><video id=stream autoplay playsinline controls></video><script>window.addEventListener('message',ev=>{try{const o=ev.data; if(o&&o.type==='attach'&&o.src){const v=document.getElementById('stream'); if(typeof o.src==='string'){v.src=o.src;}else{v.srcObject=o.src;} v.play().catch(()=>{});} }catch(e){} });</script>`;
-        w.document.open(); w.document.write(html); w.document.close();
-        try{
-          if (video.src) {
-            w.postMessage({type:'attach', src: video.src}, '*');
-          } else if (video.srcObject) {
-            alert('Pop-out opened. If your stream is WebRTC the popped window may not receive the stream automatically.');
+      <div id="cloudRelockHint">Click here to lock mouse & resume playing</div>
+    </div>
+  </div>
+
+  <script>
+    // --- Server Configuration & Wisp Helpers ---
+    const serverList = [
+        "cdn.northstreetumc.org",
+        "moc.lobtufsrepiv.ndc".split("").reverse().join(""),
+        "cdn.pcesc.org",
+        "cdn.kcchallengevbc.com",
+        "cdn.slcbmooc.org",
+        "wss://girlspreples.org/wi/"
+    ];
+
+    window.serverList = serverList;
+    window._activeServerIndex = 0;
+
+    function wispPath() {
+        return "false" !== localStorage['ABDE'] ? "/adblock/" : "/";
+    }
+
+    function wispUrl(e) {
+        return e['includes']("://") ? e : `wss://${e}${wispPath()}`;
+    }
+
+    // --- State & Utility Variables ---
+    let _gamesSearchTimer = null;
+    let _gamesKeyword = null;
+    let _cloudEnabled = false;
+    let _cloudSession = null;
+    let _cloudPc = null;
+    let _cloudDc = null;
+    let _cloudWs = null;
+    let _cloudTimers = [];
+    let _cloudInputActive = false;
+    let _cloudInputHandlers = null;
+    let _cloudStarting = false;
+    let _cloudEndedActive = false;
+    let _cloudPendingCandidates = [];
+
+    function _filterByName(list, keyword) {
+      if (!keyword) return list;
+      return list.filter(g => (g.name || '').toLowerCase().includes(keyword.toLowerCase()));
+    }
+    
+    function _gamesReload(keyword) {
+      _gamesKeyword = keyword;
+      loadGames();
+    }
+
+    // --- Resilient Multi-Server Failover API Wrapper ---
+    async function stratusApi(path, method = "GET", body) {
+      let lastError = null;
+      const totalServers = window.serverList.length;
+
+      // Start attempting from the currently known good server index, cycling through all options
+      for (let attempt = 0; attempt < totalServers; attempt++) {
+        const index = (window._activeServerIndex + attempt) % totalServers;
+        const rawServer = window.serverList[index];
+        
+        let baseUrl = "";
+        if (rawServer.includes("://")) {
+          try {
+            const urlObj = new URL(rawServer);
+            baseUrl = `https://${urlObj.host}/stratus`;
+          } catch {
+            continue;
           }
-        }catch(e){}
+        } else {
+          baseUrl = `https://${rawServer}/stratus`;
+        }
+
+        try {
+          const res = await fetch(`${baseUrl}/${path}`, {
+            method: method,
+            headers: body ? { 'content-type': 'application/json' } : undefined,
+            body: body ? JSON.stringify(body) : undefined
+          });
+
+          const data = await res.json().catch(() => ({}));
+          if (res.ok) {
+            // Save this index as the working server for future requests
+            window._activeServerIndex = index;
+            return data;
+          } else {
+            lastError = data.error || `HTTP ${res.status}`;
+          }
+        } catch (err) {
+          lastError = err.message;
+        }
+      }
+
+      return { error: lastError || "All server endpoints failed connection." };
+    }
+
+    function getStratusBase() {
+      const activeEntry = window.serverList[window._activeServerIndex] || window.serverList[0];
+      if (activeEntry.includes("://")) {
+        const urlObj = new URL(activeEntry);
+        return `https://${urlObj.host}/stratus`;
+      }
+      return `https://${activeEntry}/stratus`;
+    }
+
+    async function _loadGamesCacheEntry(key) { return null; }
+    async function _saveGamesCacheEntry(key, data) {}
+
+    // --- Cloud Player Control Functions ---
+    function closeGamePlayer() {
+      _cloudEndedActive = false;
+      const player = document.getElementById("gamePlayer");
+      const videoWrap = document.getElementById("cloudVideoWrap");
+      
+      player.classList.remove("open");
+      videoWrap.style.display = "flex";
+      
+      document.getElementById("gamePlayerId").textContent = '';
+      document.getElementById("gamePlayerTimeLeft").textContent = '';
+      
+      teardownCloud(true);
+    }
+
+    function toggleGameFullscreen() {
+      const target = _cloudSession ? document.getElementById("cloudVideoWrap") : document.getElementById("gamePlayer");
+      if (!document.fullscreenElement) {
+        target.requestFullscreen().catch(() => {});
+      } else {
+        document.exitFullscreen().catch(() => {});
+      }
+    }
+
+    document.getElementById("gamesSearch").addEventListener("input", function () {
+      clearTimeout(_gamesSearchTimer);
+      const val = this.value.trim();
+      _gamesSearchTimer = setTimeout(() => _gamesReload(val || null), 350);
+    });
+
+    function setCloudPhase(name, detail, spin) {
+      document.getElementById("cloudPhase").textContent = name;
+      document.getElementById("cloudPhaseDetail").textContent = detail || '';
+      document.getElementById("cloudSpinner").style.display = spin ? "block" : "none";
+    }
+
+    function _quitCloudSession(uuid) {
+      if (!uuid) return;
+      fetch(`${getStratusBase()}/session/${uuid}/quit`, { method: "POST", keepalive: true }).catch(() => {});
+    }
+
+    function teardownCloud(quit) {
+      if (quit && _cloudSession) _quitCloudSession(_cloudSession.uuid);
+      
+      _cloudInputActive = false;
+      _cloudStarting = false;
+      try { navigator.keyboard?.unlock?.(); } catch {}
+      
+      if (_cloudInputHandlers) {
+        const { mouseMoveHandler, mouseButtonHandler, wheelHandler, videoClickHandler, keyDownHandler, keyUpHandler, video, pointerLockChangeHandler, relockHint, invalidateRect } = _cloudInputHandlers;
+        document.removeEventListener("mousemove", mouseMoveHandler);
+        document.removeEventListener("mousedown", mouseButtonHandler);
+        document.removeEventListener("mouseup", mouseButtonHandler);
+        document.removeEventListener("wheel", wheelHandler);
+        video.removeEventListener("click", videoClickHandler);
+        document.removeEventListener("keydown", keyDownHandler, true);
+        document.removeEventListener("keyup", keyUpHandler, true);
+        document.removeEventListener("pointerlockchange", pointerLockChangeHandler);
+        window.removeEventListener("resize", invalidateRect);
+        relockHint.removeEventListener("click", videoClickHandler);
+        relockHint.style.display = "none";
+        _cloudInputHandlers = null;
+      }
+      
+      _cloudTimers.forEach(t => { clearInterval(t); clearTimeout(t); });
+      _cloudTimers = [];
+      try { if (_cloudDc) _cloudDc.close(); } catch {}
+      try { if (_cloudPc) _cloudPc.close(); } catch {}
+      try { if (_cloudWs) _cloudWs.close(); } catch {}
+      
+      _cloudDc = null;
+      _cloudPc = null;
+      _cloudWs = null;
+      _cloudSession = null;
+      _cloudPendingCandidates = [];
+      document.exitPointerLock?.();
+      
+      const videoEl = document.getElementById("cloudVideo");
+      if (videoEl) videoEl.srcObject = null;
+    }
+
+    // --- Loading Cloud Games ---
+    let _cloudGamesFetchPromise = null;
+
+    async function loadCloudGames() {
+      const cachedData = await _loadGamesCacheEntry("cloudGames");
+      if (cachedData) return cachedData;
+
+      if (!_cloudGamesFetchPromise) {
+        _cloudGamesFetchPromise = (async () => {
+          const r = await stratusApi("games");
+          if (r.error) throw new Error(r.error);
+          
+          const formattedGames = (r.games || []).map(g => ({
+            source: 'cloud',
+            name: g.name,
+            key: g.key,
+            cover: g.cover || g.image,
+            displayName: g.name,
+            _norm: (g.name || "").toLowerCase().replace(/[^a-z0-9]+/g, '')
+          }));
+          
+          await _saveGamesCacheEntry("cloudGames", formattedGames);
+          return formattedGames;
+        })();
+        _cloudGamesFetchPromise.catch(() => { _cloudGamesFetchPromise = null; });
+      }
+      return _cloudGamesFetchPromise;
+    }
+
+    function toggleCloudGames() {
+      _cloudEnabled = !_cloudEnabled;
+      const btn = document.getElementById("cloudToggle");
+      btn.classList.toggle("on", _cloudEnabled);
+      btn.textContent = `Cloud Games: ${_cloudEnabled ? 'ON' : 'OFF'}`;
+      _gamesReload(_gamesKeyword);
+    }
+    
+    document.getElementById("cloudToggle").addEventListener("click", toggleCloudGames);
+
+    // --- Game Streaming Core Mechanics ---
+    async function startCloudGame(gameKey, gameName) {
+      if (_cloudStarting) return;
+      _cloudStarting = true;
+      teardownCloud(true);
+
+      const player = document.getElementById("gamePlayer");
+      const videoWrap = document.getElementById("cloudVideoWrap");
+      const videoEl = document.getElementById("cloudVideo");
+      const overlay = document.getElementById("cloudOverlay");
+      
+      document.getElementById("gamePlayerId").textContent = `cloud/${gameName}`;
+      document.getElementById("gamePlayerTimeLeft").textContent = '';
+      
+      videoWrap.style.display = "flex";
+      videoEl.srcObject = null;
+      videoEl.muted = true;
+      overlay.style.display = "flex";
+      player.classList.add("open");
+
+      try {
+        const statusRes = await stratusApi("status");
+        if (statusRes.error) throw new Error(statusRes.error);
+
+        const idleCount = statusRes.pool?.idle || 0;
+        setCloudPhase("Requesting game", `${idleCount} idle accounts available`, true);
+
+        const s = await stratusApi("session", "POST", { game_key: gameKey });
+        if (s.error) throw new Error(s.error);
+
+        _cloudSession = { uuid: s.uuid, state: s.state, gameKey: gameKey, deadlineAt: null };
+
+        if (s.state === "queued") {
+          setCloudPhase("Queued", `Position #${s.queue_pos ?? "?"}`, false);
+          while (_cloudSession && _cloudSession.uuid === s.uuid) {
+            await new Promise(r => _cloudTimers.push(setTimeout(r, 2000)));
+            if (!_cloudSession || _cloudSession.uuid !== s.uuid) break;
+            const pollRes = await stratusApi(`session/${_cloudSession.uuid}`);
+            if (pollRes.error) throw new Error(pollRes.error);
+            if (pollRes.state === "finished_queue") break;
+            setCloudPhase("Queued", `Position #${pollRes.queue_pos ?? "?"}`, false);
+          }
+          if (!_cloudSession || _cloudSession.uuid !== s.uuid) return;
+        }
+
+        setCloudPhase("Starting", "Booting cloud instance...", true);
+        const startRes = await stratusApi(`session/${_cloudSession.uuid}/start`, "POST", {});
+        if (startRes.error) throw new Error(startRes.error);
+
+        _cloudSession.deadlineAt = Date.now() + startRes.max_seconds * 1000;
+        _cloudSession.signalingWs = startRes.signaling_ws;
+        _cloudSession.iceServers = startRes.ice_servers;
+
+        await connectCloudSignaling(startRes.signaling_ws, startRes.ice_servers);
+
+        const timerInterval = setInterval(() => {
+          if (!_cloudSession || !_cloudSession.deadlineAt) return;
+          const timeLeft = Math.max(0, Math.round((_cloudSession.deadlineAt - Date.now()) / 1000));
+          document.getElementById("gamePlayerTimeLeft").textContent = `${Math.floor(timeLeft / 60)}:${String(timeLeft % 60).padStart(2, "0")}`;
+        }, 500);
+        _cloudTimers.push(timerInterval);
+
+      } catch (e) {
+        if (_cloudSession) _quitCloudSession(_cloudSession.uuid);
+        _cloudSession = null;
+        setCloudPhase("Error", e.message, false);
+        _cloudStarting = false;
+      }
+    }
+
+    function connectCloudSignaling(signalingWs, iceServers, isReconnect) {
+      return new Promise((resolve, reject) => {
+        const sigId = signalingWs.split("/").pop();
+        const base = getStratusBase();
+        const urlObj = new URL(base);
+        const wsProtocol = urlObj.protocol === "https:" ? "wss://" : "ws://";
+        const wsUrl = `${wsProtocol}${urlObj.host}${urlObj.pathname.replace(/\/$/, '')}/signaling/${sigId}`;
+
+        const ws = new WebSocket(wsUrl);
+        _cloudWs = ws;
+
+        ws.onopen = () => {
+          if (_cloudWs !== ws) return;
+          if (!isReconnect) setCloudPhase("Connecting", "Waiting for instance...", true);
+          if (_cloudPendingCandidates.length) {
+            _cloudPendingCandidates.forEach(obj => cloudSigSend(obj));
+            _cloudPendingCandidates = [];
+          }
+        };
+        ws.onerror = () => { if (_cloudWs === ws && !isReconnect) reject(new Error("Signaling connection failed")); };
+        ws.onclose = () => {
+          if (_cloudWs !== ws) return;
+          _cloudWs = null;
+          if (!isReconnect) reject(new Error("Signaling closed"));
+        };
+        ws.onmessage = async ev => {
+          if (_cloudWs !== ws) return;
+          let m;
+          try { m = JSON.parse(ev.data); } catch { return; }
+          switch (m.type) {
+            case "game_ready":
+              if (!_cloudPc) {
+                setCloudPhase("Connecting", "Negotiating WebRTC stream...", true);
+                await createCloudPeer(iceServers);
+              }
+              resolve();
+              break;
+            case "rtc_answer":
+            case "rewsna_ctr".split("").reverse().join(""):
+              try { await _cloudPc.setRemoteDescription(new RTCSessionDescription(m.sdp)); } catch {}
+              break;
+            case "rtc_candidate":
+              try { await _cloudPc.addIceCandidate(new RTCIceCandidate(m.candidate)); } catch {}
+              break;
+            case "ping":
+              if (ws.readyState === 1) ws.send(JSON.stringify({ type: "ping" }));
+              break;
+            case "time_left":
+              if (_cloudSession && typeof m.time_left === "number") _cloudSession.deadlineAt = Date.now() + m.time_left * 1000;
+              break;
+            case "game_cap":
+            case "session_ended":
+              showCloudEndedScreen("Session Ended", m.message);
+              break;
+          }
+        };
+      });
+    }
+
+    function showCloudEndedScreen(title, detail) {
+      if (!_cloudSession) return;
+      teardownCloud(true);
+      _cloudEndedActive = true;
+      document.getElementById("cloudVideoWrap").style.display = "flex";
+      document.getElementById("cloudOverlay").style.display = "flex";
+      setCloudPhase(title, detail || '', false);
+    }
+
+    function cloudSigSend(obj) {
+      if (_cloudWs && _cloudWs.readyState === 1) _cloudWs.send(JSON.stringify(obj));
+      else if (obj.type === "rtc_candidate") _cloudPendingCandidates.push(obj);
+    }
+
+    async function createCloudPeer(iceServers) {
+      const videoEl = document.getElementById("cloudVideo");
+      _cloudPc = new RTCPeerConnection({
+        iceServers: iceServers,
+        bundlePolicy: "max-bundle",
+        rtcpMuxPolicy: "require",
+        iceCandidatePoolSize: 4
       });
 
-      async function loadGames(){
-        gameList.innerHTML = '<div class="muted">loading games…</div>';
-        let games = null;
+      _cloudPc.addTransceiver("audio", { direction: 'recvonly' });
+      _cloudPc.addTransceiver("video", { direction: "recvonly" });
 
-        // Prefer main.js helper loadCloudGames when available (it returns normalized cloud entries)
-        if (typeof loadCloudGames === 'function'){
-          try{
-            const list = await loadCloudGames();
-            if (Array.isArray(list) && list.length) {
-              games = list.map(g => ({ id: g.key || g.name || g.displayName, key: g.key, name: g.displayName || g.name || g._norm || g.name, description: g.description || '', cover: g.cover }));
-            }
-          }catch(e){ console.warn('loadCloudGames failed', e); }
+      _cloudDc = _cloudPc.createDataChannel("input", {
+        id: 1, ordered: false, maxRetransmits: 0, priority: "high"
+      });
+
+      _cloudDc.onclose = () => {
+         if (_cloudDc && _cloudSession) showCloudEndedScreen("Session Ended", "Lost the input channel.");
+      };
+
+      _cloudPc.ontrack = ev => {
+        if (!videoEl.srcObject) videoEl.srcObject = new MediaStream();
+        videoEl.srcObject.addTrack(ev.track);
+      };
+
+      _cloudPc.onicecandidate = ev => {
+        if (ev.candidate) cloudSigSend({ type: 'rtc_candidate', candidate: ev.candidate.toJSON() });
+      };
+
+      _cloudPc.onconnectionstatechange = () => {
+        if (!_cloudPc) return;
+        const state = _cloudPc.connectionState;
+        if (state === "connected") {
+          document.getElementById("cloudOverlay").style.display = "none";
+          videoEl.muted = false;
+          videoEl.play().catch(() => {});
+          _cloudInputActive = true;
+          _cloudStarting = false;
+          setupCloudInput();
+          if (document.fullscreenElement) try { navigator.keyboard?.lock?.(); } catch {}
+          return;
         }
-
-        // Fallback: try stratusApi (various path variants)
-        if ((!games || !games.length) && typeof stratusApi === 'function'){
-          try{
-            const tryPaths = ['games', '/games', 'cloud/games', '/cloud/games'];
-            for (const p of tryPaths) {
-              try{
-                const r = await stratusApi(p);
-                if (r && Array.isArray(r.games)) { games = r.games.map(g => ({ id: g.key||g.id||g.name, key: g.key||g.id, name: g.name||g.title||g.id, description: g.description || '', cover: g.cover||g.image })); break; }
-                if (Array.isArray(r)) { games = r.map(g => ({ id: g.key||g.id||g.name, key: g.key||g.id, name: g.name||g.title||g.id, description: g.description || '', cover: g.cover||g.image })); break; }
-                if (r && Array.isArray(r.games_list)) { games = r.games_list.map(g => ({ id: g.key||g.id||g.name, key: g.key||g.id, name: g.name||g.title||g.id, description: g.description || '', cover: g.cover||g.image })); break; }
-              }catch(e){ /* try next */ }
-            }
-          }catch(e){ console.warn('stratusApi failed', e); }
+        if (["failed", "closed"].includes(state)) {
+          showCloudEndedScreen("Session Ended", "Lost connection to the stream.");
         }
+      };
 
-        // Final fallback sample list
-        if (!games || !games.length){
+      const offer = await _cloudPc.createOffer();
+      await _cloudPc.setLocalDescription(offer);
+      cloudSigSend({ type: 'rtc_offer', sdp: offer.sdp });
+    }
+
+    function setupCloudInput() {
+      if (_cloudInputHandlers) return;
+      const videoEl = document.getElementById("cloudVideo");
+      const relockHint = document.getElementById("cloudRelockHint");
+      
+      let cursorX = 0, cursorY = 0, relX = 0, relY = 0, buttonsState = 0;
+      const activeKeys = new Set();
+      let cachedRect = null;
+
+      const getRect = () => {
+        if (!cachedRect) {
+          const r = videoEl.getBoundingClientRect();
+          const vw = videoEl.videoWidth || 16;
+          const vh = videoEl.videoHeight || 9;
+          const scale = Math.min(r.width / vw, r.height / vh);
+          const w = vw * scale;
+          const h = vh * scale;
+          cachedRect = { left: r.left + (r.width - w) / 2, top: r.top + (r.height - h) / 2, width: w, height: h };
+        }
+        return cachedRect;
+      };
+
+      window.addEventListener("resize", () => { cachedRect = null; });
+
+      const sendInputBuf = buf => {
+        try { if (_cloudDc && _cloudDc.readyState === "open") _cloudDc.send(buf); } catch {}
+      };
+
+      const sendMouse = (moveX = 0, moveY = 0, scroll = 0) => {
+        if (!_cloudDc || _cloudDc.readyState !== "open") return;
+        moveX = Math.max(-127, Math.min(127, moveX));
+        moveY = Math.max(-127, Math.min(127, moveY));
+        const r = getRect();
+        const posX = Math.floor((cursorX - r.left) / r.width * 10000);
+        const posY = Math.floor((cursorY - r.top) / r.height * 10000);
+
+        const buf = new ArrayBuffer(12);
+        const v = new DataView(buf);
+        v.setUint8(0, 1); v.setUint8(1, 11); v.setUint8(2, 2); v.setUint8(3, 8);
+        v.setUint16(4, Math.max(0, Math.min(10000, posX)));
+        v.setUint16(6, Math.max(0, Math.min(10000, posY)));
+        v.setInt8(8, moveX); v.setInt8(9, moveY);
+        v.setUint8(10, buttonsState);
+        v.setInt8(11, scroll);
+        sendInputBuf(buf);
+      };
+
+      const mouseMoveHandler = e => {
+        if (!_cloudInputActive) return;
+        const movX = e.movementX || 0;
+        const movY = e.movementY || 0;
+        if (document.pointerLockElement === videoEl) {
+          const r = getRect();
+          relX = Math.max(0, Math.min(r.width, relX + movX));
+          relY = Math.max(0, Math.min(r.height, relY + movY));
+          cursorX = r.left + relX;
+          cursorY = r.top + relY;
+        } else {
+          cursorX = e.clientX;
+          cursorY = e.clientY;
+        }
+        sendMouse(movX, movY, 0);
+      };
+
+      const mouseButtonHandler = e => {
+        if (!_cloudInputActive) return;
+        buttonsState = e.buttons;
+        sendMouse(0, 0, 0);
+      };
+
+      const wheelHandler = e => {
+        if (!_cloudInputActive) return;
+        e.preventDefault();
+        sendMouse(0, 0, e.deltaY > 0 ? -1 : 1);
+      };
+
+      const videoClickHandler = () => {
+        if (!_cloudDc) return;
+        if (document.pointerLockElement === videoEl) return;
+        cachedRect = null;
+        const r = getRect();
+        relX = r.width / 2; relY = r.height / 2;
+        cursorX = r.left + relX; cursorY = r.top + relY;
+        videoEl.requestPointerLock?.();
+      };
+
+      const pointerLockChangeHandler = () => {
+        if (!_cloudInputActive) return;
+        if (document.pointerLockElement === videoEl) {
+          relockHint.style.display = "none";
+        } else {
+          relockHint.style.display = document.getElementById("cloudOverlay").style.display !== "none" ? "none" : "block";
+        }
+      };
+
+      const keyHandler = isDown => e => {
+        if (!_cloudInputActive) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (isDown && e.repeat) return;
+        
+        if (isDown) activeKeys.add(e.keyCode);
+        else activeKeys.delete(e.keyCode);
+
+        const buf = new ArrayBuffer(24);
+        const v = new DataView(buf);
+        v.setUint8(0, 1); v.setUint8(2, 1); v.setUint8(3, 1);
+        v.setUint16(4, e.keyCode);
+        v.setUint8(6, isDown ? 1 : 0);
+        let offset = 7;
+        for (const k of activeKeys) {
+          if (k !== e.keyCode && k > 0 && k < 255 && offset < 21) {
+            v.setUint16(offset, k); offset += 2;
+            v.setUint8(offset, 1); offset++;
+          }
+        }
+        v.setUint8(offset++, 255);
+        v.setUint8(1, offset - 1);
+        sendInputBuf(buf.slice(0, offset));
+      };
+
+      const keyDownHandler = keyHandler(true);
+      const keyUpHandler = keyHandler(false);
+
+      document.addEventListener("mousemove", mouseMoveHandler);
+      document.addEventListener("mousedown", mouseButtonHandler);
+      document.addEventListener("mouseup", mouseButtonHandler);
+      document.addEventListener("contextmenu", e => { if (_cloudInputActive) e.preventDefault(); });
+      document.addEventListener("wheel", wheelHandler, { passive: false });
+      videoEl.addEventListener("click", videoClickHandler);
+      document.addEventListener("keydown", keyDownHandler, true);
+      document.addEventListener("keyup", keyUpHandler, true);
+      document.addEventListener("pointerlockchange", pointerLockChangeHandler);
+      relockHint.addEventListener("click", videoClickHandler);
+
+      _cloudInputHandlers = {
+        mouseMoveHandler, mouseButtonHandler, wheelHandler,
+        videoClickHandler, keyDownHandler, keyUpHandler, video: videoEl,
+        pointerLockChangeHandler, relockHint, invalidateRect: () => { cachedRect = null; }
+      };
+    }
+
+    // --- Game Library Initialization ---
+    async function loadGames() {
+      const gameList = document.getElementById('gameList');
+      gameList.innerHTML = '<div class="muted">Loading games...</div>';
+      let games = [];
+
+      try {
+        if (_cloudEnabled) {
+          games = await loadCloudGames();
+          if (_gamesKeyword) games = _filterByName(games, _gamesKeyword);
+        } else {
           games = [
-            { id:'demo-1', name:'Demo Cloud Game 1', description:'Demo stream (iframe)', streamUrl: 'https://nowgg.fun/embed/demo' },
-            { id:'demo-2', name:'Demo Cloud Game 2', description:'Demo WebRTC', streamUrl: 'https://nowgg.fun/stream' },
-            { id:'nowgg-main', name:'nowgg.fun Cloud Gaming', description:'Connect to nowgg.fun', streamUrl: 'https://nowgg.fun' }
+            { id: 'demo-1', name: 'Demo Cloud Game 1', description: 'Sample cloud game slot', key: 'demo-game-1' },
+            { id: 'demo-2', name: 'Demo Cloud Game 2', description: 'Sample cloud game slot', key: 'demo-game-2' }
           ];
+          if (_gamesKeyword) games = _filterByName(games, _gamesKeyword);
         }
-
-        renderGames(games);
+      } catch (e) {
+        console.warn('Failed to load games list:', e);
+        gameList.innerHTML = `<div class="muted" style="color:#ff4d4f">Error loading games: ${e.message}</div>`;
+        return;
       }
 
-      function renderGames(games){
-        gameList.innerHTML = '';
-        for (const g of games){
-          const div = document.createElement('div'); div.className='game';
-          const title = document.createElement('h3'); title.textContent = g.name || g.title || g.id; div.appendChild(title);
-          if (g.description) { const p = document.createElement('div'); p.className='muted'; p.textContent = g.description; div.appendChild(p); }
+      renderGames(games);
+    }
 
-          const startBtn = document.createElement('button'); startBtn.textContent = 'Start Stream';
-          startBtn.addEventListener('click', ()=>startGame(g));
-
-          const iframeBtn = document.createElement('button'); iframeBtn.textContent = 'Open in iframe'; iframeBtn.style.marginLeft='8px';
-          iframeBtn.addEventListener('click', ()=>openInIframe(g));
-
-          div.appendChild(startBtn); div.appendChild(iframeBtn);
-          gameList.appendChild(div);
-        }
+    function renderGames(games) {
+      const gameList = document.getElementById('gameList');
+      gameList.innerHTML = '';
+      
+      if (!games.length) {
+        gameList.innerHTML = '<div class="muted">No games found. Try toggling Cloud Games ON.</div>';
+        return;
       }
 
-      async function startGame(game){
-        // If the cloud helper startCloudGame exists, prefer it (handles signaling/webrtc/queue)
-        if (typeof startCloudGame === 'function' && (game.key || game.id)){
-          try{
-            await startCloudGame(game.key || game.id, game.name || game.title || game.id);
-            return;
-          }catch(e){ console.warn('startCloudGame failed', e); }
+      for (const g of games) {
+        const div = document.createElement('div');
+        div.className = 'game';
+        
+        const title = document.createElement('h3');
+        title.textContent = g.name || g.displayName || g.id;
+        div.appendChild(title);
+
+        if (g.description) {
+          const desc = document.createElement('div');
+          desc.className = 'muted';
+          desc.textContent = g.description;
+          div.appendChild(desc);
         }
 
-        // If a direct stream URL is present, attach to <video>
-        const streamUrl = game.streamUrl || game.url || game.stream || null;
-        if (streamUrl){
-          if (typeof streamUrl === 'string' && (streamUrl.endsWith('.mp4') || streamUrl.startsWith('blob:') || streamUrl.startsWith('data:') || streamUrl.includes('/stream') || streamUrl.includes('/play'))){
-            video.src = streamUrl;
-            video.play().catch(()=>{});
-            return;
-          }
-          openUrlInIframe(streamUrl);
-          return;
-        }
-
-        // If stratus/base available, open play URL
-        if (typeof getStratusBase === 'function' && (game.key || game.id)){
-          const base = getStratusBase();
-          const playUrl = `${base.replace(/\/$/, '')}/play/${encodeURIComponent(game.key || game.id)}`;
-          openUrlInIframe(playUrl);
-          return;
-        }
-
-        alert('Could not start stream automatically; try "Open in iframe".');
+        const startBtn = document.createElement('button');
+        startBtn.textContent = 'Start Cloud Game';
+        startBtn.style.marginTop = '10px';
+        startBtn.addEventListener('click', () => startCloudGame(g.key || g.id, g.name || g.displayName || g.id));
+        
+        div.appendChild(startBtn);
+        gameList.appendChild(div);
       }
+    }
 
-      function openInIframe(game){
-        let url = game.streamUrl || game.url || game.playUrl || null;
-        if (!url && (game.key || game.id) && typeof getStratusBase === 'function'){
-          url = `${getStratusBase().replace(/\/$/, '')}/play/${encodeURIComponent(game.key || game.id)}`;
-        }
-        if (!url) return alert('No URL available for this game');
-        openUrlInIframe(url);
-      }
-
-      function openUrlInIframe(url){
-        const overlay = document.createElement('div');
-        overlay.className = 'overlay-backdrop';
-        overlay.innerHTML = `<div class="overlay-iframe"><iframe src="${escapeHtml(url)}" style="width:100%;height:100%;border:0;" allow="autoplay; fullscreen; xr-spatial-tracking; gyroscope; accelerometer;" ></iframe></div>`;
-        overlay.addEventListener('click', (e)=>{ if (e.target===overlay) document.body.removeChild(overlay); });
-        document.body.appendChild(overlay);
-      }
-
-      function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-
-      function stopStream(){
-        try{
-          if (video.srcObject){
-            const tracks = video.srcObject.getTracks();
-            for (const t of tracks) try{ t.stop(); }catch(e){}
-            video.srcObject = null;
-          }
-          video.pause(); video.removeAttribute('src');
-        }catch(e){}
-      }
-
-      // Wait for main.js cloud helpers to be available, then load games
-      let tries = 0;
-      const startLoad = () => {
-        // prefer loadCloudGames or stratusApi to be present; otherwise keep trying a few times
-        if (typeof loadCloudGames !== 'function' && typeof stratusApi !== 'function' && tries < 20){ tries++; return setTimeout(startLoad, 300); }
-        loadGames();
-      };
-      startLoad();
-
-      // expose limited API
-      window.opiumCloudIndex = {
-        refresh: loadGames
-      };
-    })();
+    document.getElementById('refreshBtn').addEventListener('click', loadGames);
+    loadGames();
   </script>
-
-  <!-- Include repo's loader and main script for cloud code integration -->
-  <script src="loader.js"></script>
-  <script src="jet/jet.inject.js"></script>
-  <script src="jet/jet.core.js"></script>
-  <script src="jet/jet.api.js"></script>
-  <script src="main.js"></script>
-  <!-- pox and curl are modules; load only if supported -->
-  <script type="module">import './pox/index.mjs'; import './curl/index.mjs';</script>
 </body>
 </html>
