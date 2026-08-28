@@ -48,7 +48,7 @@
   </main>
 
   <script>
-    // Minimal cloud-only index page — attempts to reuse existing repo endpoints
+    // Cloud-only index page with nowgg.fun support
     (function(){
       const serverInput = document.getElementById('server');
       const refreshBtn = document.getElementById('refreshBtn');
@@ -57,7 +57,7 @@
       const stopBtn = document.getElementById('stopBtn');
       const openWindowBtn = document.getElementById('openWindowBtn');
 
-      // sensible defaults: try to use same origin, then fallback to common dev host
+      // Sensible defaults: try to use same origin, then fallback to nowgg.fun
       const defaults = [location.origin, 'https://nowgg.fun', 'https://cloud.opium.example'];
       serverInput.value = localStorage.getItem('opium:cloud:server') || defaults[0];
 
@@ -67,7 +67,7 @@
       openWindowBtn.addEventListener('click', () => {
         if (!video.src && !video.srcObject) return alert('No active stream');
         const w = window.open('', '_blank');
-        const html = `<!doctype html><title>opium stream</title><style>html,body{margin:0;background:#000;height:100%}video{width:100%;height:100%;background:#000}</style><video id=stream autoplay playsinline controls></video><script>const v=document.getElementById('stream');navigator.mediaDevices&&navigator.mediaDevices.getUserMedia?document.currentScript:0;setTimeout(()=>{try{v.src='${video.src || ''}';}catch(e){}},100);</script>`;
+        const html = `<!doctype html><title>opium stream</title><style>html,body{margin:0;background:#000;height:100%}video{width:100%;height:100%;background:#000}</style><video id=stream autoplay playsinline controls></video><script>try{document.getElementById('stream').srcObject=parent.document.getElementById('preStreamVideo').srcObject;}catch(e){try{document.getElementById('stream').src=parent.document.getElementById('preStreamVideo').src;}catch(e){}}</script>`;
         w.document.open(); w.document.write(html); w.document.close();
       });
 
@@ -75,7 +75,7 @@
         const server = serverInput.value = (serverInput.value || location.origin).replace(/\/$/, '');
         localStorage.setItem('opium:cloud:server', server);
 
-        // try a few common endpoints used by cloud backends — fall back to sample list
+        // Try common endpoints used by cloud backends — fall back to sample list
         const endpoints = [
           server + '/cloud/games',
           server + '/api/cloud/games',
@@ -95,10 +95,11 @@
         }
 
         if (!games){
-          // fallback sample list (so UI is usable if no backend exists)
+          // Fallback sample list with nowgg.fun examples
           games = [
             { id:'demo-1', name:'Demo Cloud Game 1', description:'Demo stream (iframe)', streamUrl: 'https://nowgg.fun/embed/demo' },
-            { id:'demo-2', name:'Demo Cloud Game 2', description:'Demo WebRTC', streamUrl: '' }
+            { id:'demo-2', name:'Demo Cloud Game 2', description:'Demo WebRTC', streamUrl: 'https://nowgg.fun/stream' },
+            { id:'nowgg-main', name:'nowgg.fun Cloud Gaming', description:'Connect to nowgg.fun', streamUrl: 'https://nowgg.fun' }
           ];
         }
 
@@ -125,7 +126,7 @@
 
       async function startGame(game){
         const server = serverInput.value.replace(/\/$/, '');
-        // Preferred: POST to server to request a stream. Try a few common endpoints.
+        // Preferred: POST to server to request a stream. Try common endpoints.
         const startEndpoints = [
           server + '/cloud/start',
           server + '/api/cloud/start',
@@ -145,14 +146,14 @@
         // If backend returned a stream URL, open it. Otherwise, try game.streamUrl
         const streamUrl = (started && (started.streamUrl||started.url)) || game.streamUrl;
         if (streamUrl){
-          // if it's an mpeg/dash/hls or blob URL just set video.src
+          // If it's an mpeg/dash/hls, blob URL, or stream endpoint just set video.src
           if (streamUrl.endsWith('.mp4') || streamUrl.startsWith('blob:') || streamUrl.startsWith('data:') || streamUrl.includes('/stream')){
             video.src = streamUrl;
             video.play().catch(()=>{});
             return;
           }
 
-          // many cloud providers provide an embeddable page — open in iframe overlay
+          // Many cloud providers like nowgg.fun provide an embeddable page — open in iframe overlay
           openUrlInIframe(streamUrl);
           return;
         }
@@ -171,17 +172,16 @@
       }
 
       function openUrlInIframe(url){
-        // simple overlay
+        // Simple overlay iframe for nowgg.fun and other providers
         const overlay = document.createElement('div');
         overlay.style.position='fixed'; overlay.style.inset='0'; overlay.style.zIndex=9999; overlay.style.background='rgba(0,0,0,.85)';
-        overlay.innerHTML = `<div style="position:absolute;inset:30px;border-radius:10px;overflow:hidden;background:#000"><iframe src="${url}" style="width:100%;height:100%;border:0"></iframe></div>`;
+        overlay.innerHTML = `<div style="position:absolute;inset:30px;border-radius:10px;overflow:hidden;background:#000"><iframe src="${url}" style="width:100%;height:100%;border:0;allow-usb;allow-microphone;allow-camera"></iframe><div style="position:absolute;top:10px;right:10px;cursor:pointer;color:#fff;font-size:24px;background:#333;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:4px" onclick="document.body.removeChild(this.closest('div').parentNode);">×</div></div>`;
         overlay.addEventListener('click', (e)=>{ if (e.target===overlay) document.body.removeChild(overlay); });
         document.body.appendChild(overlay);
       }
 
       async function startWebRTCFlow(server, game){
-        // This function attempts a generic WebRTC offer/answer flow against a presumed signalling path:
-        // POST ${server}/cloud/webrtc/offer  { id }
+        // Generic WebRTC offer/answer flow for cloud providers
         const ep = serverInput.value.replace(/\/$/, '') + '/cloud/webrtc/offer';
         const res = await fetch(ep, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id: game.id})});
         if (!res.ok) throw new Error('no signaling');
@@ -189,30 +189,26 @@
         if (!data.sdp || !data.ice) throw new Error('invalid signaling');
 
         const pc = new RTCPeerConnection();
-        // attach remote track to video
+        // Attach remote track to video
         pc.ontrack = (ev)=>{ try{ video.srcObject = ev.streams[0]; }catch(e){} };
 
-        // add transceivers if needed
+        // Add transceivers if needed
         pc.onicecandidate = (e)=>{
           if (!e.candidate) return;
-          // send candidate to server
+          // Send candidate to server
           fetch(serverInput.value.replace(/\/$/, '') + '/cloud/webrtc/candidate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:game.id,candidate:e.candidate})}).catch(()=>{});
         };
 
-        // create data channel just in case
+        // Create data channel just in case
         pc.createDataChannel('opium');
 
-        // set remote description from server's answer (server may respond with answer directly)
+        // Set remote description from server's answer
         await pc.setRemoteDescription({type:'answer',sdp:data.sdp});
 
-        // if server expects our offer, create one and POST it
+        // If server expects our offer, create one and POST it
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
-        // send offer to server
         await fetch(serverInput.value.replace(/\/$/, '') + '/cloud/webrtc/offer', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:game.id,offer:offer.sdp})});
-
-        // NOTE: this is a generic approach — some providers use different signalling. If your server uses a custom flow
-        // please point the Server input to the correct origin and the page will attempt common endpoints.
 
         return pc;
       }
@@ -228,10 +224,10 @@
         }catch(e){}
       }
 
-      // initial load
+      // Initial load
       loadGames();
 
-      // expose a small API for existing site scripts that expect preStreamVideo
+      // Expose a small API for existing site scripts that expect preStreamVideo
       window.opiumCloud = {
         attachStreamToVideo: (srcOrObject)=>{
           try{
@@ -244,7 +240,7 @@
     })();
   </script>
 
-  <!-- Include repo's loader and main script so any internal cloud code still works when present -->
+  <!-- Include repo's loader and main script for cloud code integration -->
   <script src="loader.js"></script>
   <script src="jet/jet.inject.js"></script>
   <script src="jet/jet.core.js"></script>
