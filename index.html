@@ -20,7 +20,7 @@
     #gamePlayer.open {display:flex}
     #cloudVideoWrap {position:relative;flex:1;background:#000;display:flex;align-items:center;justify-content:center;overflow:hidden}
     #cloudVideo {width:100%;height:100%;object-fit:contain;background:#000}
-    #cloudOverlay {position:absolute;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;color:#fff;text-align:center;padding:20[...]
+    #cloudOverlay {position:absolute;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:10;color:#fff;text-align:center;padding:20px}
     #cloudSpinner {width:40px;height:40px;border:4px solid rgba(255,255,255,0.2);border-top-color:#1f8cff;border-radius:50%;animation:spin 1s linear infinite;margin-bottom:15px}
     @keyframes spin {to{transform:rotate(360deg)}}
     
@@ -225,7 +225,7 @@
       try { navigator.keyboard?.unlock?.(); } catch {}
       
       if (_cloudInputHandlers) {
-        const { mouseMoveHandler, mouseButtonHandler, wheelHandler, videoClickHandler, keyDownHandler, keyUpHandler, video, pointerLockChangeHandler, relockHint, invalidateRect } = _cloudInputHan[...]
+        const { mouseMoveHandler, mouseButtonHandler, wheelHandler, videoClickHandler, keyDownHandler, keyUpHandler, video, pointerLockChangeHandler, relockHint, invalidateRect } = _cloudInputHandlers;
         document.removeEventListener("mousemove", mouseMoveHandler);
         document.removeEventListener("mousedown", mouseButtonHandler);
         document.removeEventListener("mouseup", mouseButtonHandler);
