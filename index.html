@@ -386,15 +386,25 @@
       }
     }
 
+    // New/robust signaling & WebRTC logic copied and adapted from old main.js implementation
+    function cloudSigSend(obj) {
+      if (_cloudWs && _cloudWs.readyState === 1) _cloudWs.send(JSON.stringify(obj));
+      else if (obj.type === "rtc_candidate") _cloudPendingCandidates.push(obj);
+    }
+
+    function showCloudEndedScreen(title, detail) {
+      if (!_cloudSession) return;
+      teardownCloud(true);
+      _cloudEndedActive = true;
+      document.getElementById("cloudVideoWrap").style.display = "flex";
+      document.getElementById("cloudOverlay").style.display = "flex";
+      setCloudPhase(title, detail || '', false);
+    }
+
     function connectCloudSignaling(signalingWs, iceServers, isReconnect) {
       return new Promise((resolve, reject) => {
-        // normalize incoming value so we prefer wss:// on secure pages
         signalingWs = _normalizeSignalingUrl(signalingWs);
 
-        // Build a robust websocket URL:
-        // - If signalingWs is already a ws/wss URL, use it
-        // - If it's http/https, convert to ws/wss using same host/path
-        // - If it's a plain path or id, combine with getStratusBase()
         let wsUrl;
         try {
           if (typeof signalingWs === "string" && (signalingWs.startsWith("ws://") || signalingWs.startsWith("wss://"))) {
@@ -403,7 +413,6 @@
             const u = new URL(signalingWs);
             wsUrl = (u.protocol === "https:" ? "wss://" : "ws://") + u.host + u.pathname;
           } else if (typeof signalingWs === "string" && signalingWs.includes("/")) {
-            // Might be a path-like value. Use base + path
             const base = getStratusBase();
             const baseUrl = new URL(base);
             wsUrl = (baseUrl.protocol === "https:" ? "wss://" : "ws://")
@@ -411,7 +420,6 @@
                     + baseUrl.pathname.replace(/\/$/, '')
                     + '/' + signalingWs.replace(/^\/+/, '');
           } else {
-            // Treat as a simple id -> /signaling/{id} on the active stratus base
             const sigId = String(signalingWs);
             const base = getStratusBase();
             const urlObj = new URL(base);
@@ -424,7 +432,6 @@
           return reject(new Error("Invalid signaling URL"));
         }
 
-        // If page is secure but wsUrl is insecure, upgrade to wss://
         if (location.protocol === 'https:' && typeof wsUrl === 'string' && wsUrl.startsWith('ws://')) {
           wsUrl = wsUrl.replace(/^ws:\/\//i, 'wss://');
         }
@@ -457,6 +464,8 @@
           let m;
           try { m = JSON.parse(ev.data); } catch { return; }
 
+          console.debug('signaling message', m);
+
           switch (m.type) {
             case "game_ready":
               if (!_cloudPc) {
@@ -477,13 +486,14 @@
                 }
                 // setRemoteDescription accepts RTCSessionDescriptionInit
                 await _cloudPc.setRemoteDescription(remoteDesc);
-              } catch (err) { /* ignore */ }
+                console.debug('remote description set');
+              } catch (err) { console.warn('setRemoteDescription failed', err); }
               break;
 
             case "rtc_candidate":
               try {
                 await _cloudPc.addIceCandidate(new RTCIceCandidate(m.candidate));
-              } catch (err) { /* ignore */ }
+              } catch (err) { console.warn('addIceCandidate failed', err); }
               break;
 
             case "ping":
@@ -503,20 +513,6 @@
       });
     }
 
-    function showCloudEndedScreen(title, detail) {
-      if (!_cloudSession) return;
-      teardownCloud(true);
-      _cloudEndedActive = true;
-      document.getElementById("cloudVideoWrap").style.display = "flex";
-      document.getElementById("cloudOverlay").style.display = "flex";
-      setCloudPhase(title, detail || '', false);
-    }
-
-    function cloudSigSend(obj) {
-      if (_cloudWs && _cloudWs.readyState === 1) _cloudWs.send(JSON.stringify(obj));
-      else if (obj.type === "rtc_candidate") _cloudPendingCandidates.push(obj);
-    }
-
     async function createCloudPeer(iceServers) {
       const videoEl = document.getElementById("cloudVideo");
       _cloudPc = new RTCPeerConnection({
@@ -529,19 +525,24 @@
       _cloudPc.addTransceiver("audio", { direction: 'recvonly' });
       _cloudPc.addTransceiver("video", { direction: "recvonly" });
 
-      _cloudDc = _cloudPc.createDatachannel ? _cloudPc.createDatachannel("input", {
-        id: 1, ordered: false, maxRetransmits: 0, priority: "high"
-      }) : _cloudPc.createDataChannel("input", {
-        id: 1, ordered: false, maxRetransmits: 0, priority: "high"
-      });
+      // create data channel for input; prefer standard API name
+      try {
+        _cloudDc = _cloudPc.createDataChannel ? _cloudPc.createDataChannel("input", { id: 1, ordered: false, maxRetransmits: 0, priority: "high" }) : _cloudPc.createDataChannel("input", { id: 1, ordered: false, maxRetransmits: 0, priority: "high" });
+      } catch (err) {
+        // fallback if browser implements different casing
+        _cloudDc = _cloudPc.createDataChannel("input", { id: 1, ordered: false, maxRetransmits: 0, priority: "high" });
+      }
 
+      _cloudDc.onopen = () => { console.debug('input datachannel open'); };
+      _cloudDc.onmessage = ev => { console.debug('input datachannel message', ev.data); };
       _cloudDc.onclose = () => {
          if (_cloudDc && _cloudSession) showCloudEndedScreen("Session Ended", "Lost the input channel.");
       };
 
       _cloudPc.ontrack = ev => {
+        console.debug('ontrack', ev.track && ev.track.kind);
         if (!videoEl.srcObject) videoEl.srcObject = new MediaStream();
-        videoEl.srcObject.addTrack(ev.track);
+        try { videoEl.srcObject.addTrack(ev.track); } catch (err) { console.warn('addTrack failed', err); }
       };
 
       _cloudPc.onicecandidate = ev => {
@@ -551,6 +552,7 @@
       _cloudPc.onconnectionstatechange = () => {
         if (!_cloudPc) return;
         const state = _cloudPc.connectionState;
+        console.debug('pc connection state', state);
         if (state === "connected") {
           document.getElementById("cloudOverlay").style.display = "none";
           videoEl.muted = false;
@@ -568,7 +570,8 @@
 
       const offer = await _cloudPc.createOffer();
       await _cloudPc.setLocalDescription(offer);
-      cloudSigSend({ type: 'rtc_offer', sdp: offer.sdp });
+      // send full offer object to ensure backend has type & sdp
+      cloudSigSend({ type: 'rtc_offer', sdp: { type: offer.type || 'offer', sdp: offer.sdp } });
     }
 
     function setupCloudInput() {
@@ -596,7 +599,7 @@
       window.addEventListener("resize", () => { cachedRect = null; });
 
       const sendInputBuf = buf => {
-        try { if (_cloudDc && _cloudDc.readyState === "open") _cloudDc.send(buf); } catch {}
+        try { if (_cloudDc && _cloudDc.readyState === "open") _cloudDc.send(buf); else console.debug('dc not open, cannot send input'); } catch (err) { console.warn('sendInputBuf error', err); }
       };
 
       const sendMouse = (moveX = 0, moveY = 0, scroll = 0) => {
