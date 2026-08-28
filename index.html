@@ -19,14 +19,14 @@
     label{font-size:0.9rem}
     input[type=text]{background:#0b0b0d;border:1px solid #222;color:#eee;padding:6px;border-radius:6px}
     .muted{opacity:.7;font-size:0.9rem}
+    .overlay-iframe{position:absolute;inset:30px;border-radius:10px;overflow:hidden;background:#000}
+    .overlay-backdrop{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.85);display:flex;align-items:stretch;justify-content:stretch}
   </style>
 </head>
 <body>
   <header>
-    <h1>opium — Cloud Gaming (Cloud only)</h1>
+    <h1>opium — Cloud Gaming (Cloud integrated)</h1>
     <div id="controls">
-      <label for="server">Server:</label>
-      <input id="server" type="text" placeholder="https://your-cloud-server.example" style="width:280px" />
       <button id="refreshBtn">Refresh</button>
     </div>
   </header>
@@ -48,54 +48,55 @@
   </main>
 
   <script>
-    // Cloud-only index page with nowgg.fun support
+    // Lightweight cloud renderer that uses the stratusApi and cloud helpers defined in main.js
     (function(){
-      const serverInput = document.getElementById('server');
       const refreshBtn = document.getElementById('refreshBtn');
       const gameList = document.getElementById('gameList');
       const video = document.getElementById('preStreamVideo');
       const stopBtn = document.getElementById('stopBtn');
       const openWindowBtn = document.getElementById('openWindowBtn');
 
-      // Sensible defaults: try to use same origin, then fallback to nowgg.fun
-      const defaults = [location.origin, 'https://nowgg.fun', 'https://cloud.opium.example'];
-      serverInput.value = localStorage.getItem('opium:cloud:server') || defaults[0];
-
       refreshBtn.addEventListener('click', loadGames);
-
       stopBtn.addEventListener('click', stopStream);
-      openWindowBtn.addEventListener('click', () => {
+      openWindowBtn.addEventListener('click', ()=>{
         if (!video.src && !video.srcObject) return alert('No active stream');
         const w = window.open('', '_blank');
-        const html = `<!doctype html><title>opium stream</title><style>html,body{margin:0;background:#000;height:100%}video{width:100%;height:100%;background:#000}</style><video id=stream autoplay playsinline controls></video><script>try{document.getElementById('stream').srcObject=parent.document.getElementById('preStreamVideo').srcObject;}catch(e){try{document.getElementById('stream').src=parent.document.getElementById('preStreamVideo').src;}catch(e){}}</script>`;
+        const html = `<!doctype html><title>opium stream</title><style>html,body{margin:0;background:#000;height:100%}video{width:100%;height:100%;background:#000}</style><video id=stream autoplay playsinline controls></video><script>window.addEventListener('message',ev=>{try{const o=ev.data; if(o&&o.type==='attach'&&o.src){const v=document.getElementById('stream'); if(typeof o.src==='string'){v.src=o.src;}else{v.srcObject=o.src;} v.play().catch(()=>{});} }catch(e){} });</script>`;
         w.document.open(); w.document.write(html); w.document.close();
+        try{
+          // try to postMessage the src (works only for objects that can be cloned)
+          if (video.src) {
+            w.postMessage({type:'attach', src: video.src}, '*');
+          } else if (video.srcObject) {
+            // cannot post srcObject across windows reliably; leave blank and user can manually attach
+            alert('Pop-out opened. If your stream is WebRTC the popped window may not receive the stream automatically.');
+          }
+        }catch(e){}
       });
 
       async function loadGames(){
-        const server = serverInput.value = (serverInput.value || location.origin).replace(/\/$/, '');
-        localStorage.setItem('opium:cloud:server', server);
-
-        // Try common endpoints used by cloud backends — fall back to sample list
-        const endpoints = [
-          server + '/cloud/games',
-          server + '/api/cloud/games',
-          server + '/api/games',
-          server + '/games.json'
-        ];
-
+        gameList.innerHTML = '<div class="muted">loading games…</div>';
+        // Use stratusApi if available (from main.js). It will pick the correct base using getStratusBase().
         let games = null;
-        for (const ep of endpoints){
-          try{
-            const res = await fetch(ep, {cache:'no-store'});
-            if (!res.ok) continue;
-            const data = await res.json();
-            if (Array.isArray(data)) { games = data; break; }
-            if (data && Array.isArray(data.games)) { games = data.games; break; }
-          }catch(e){ /* try next */ }
+        try{
+          if (typeof stratusApi === 'function'){
+            // stratusApi might expect a path like 'games' or '/games' depending on implementation in main.js
+            const tryPaths = ['games', '/games', 'cloud/games', '/cloud/games'];
+            for (const p of tryPaths) {
+              try{
+                const r = await stratusApi(p);
+                if (r && Array.isArray(r.games)) { games = r.games; break; }
+                if (Array.isArray(r)) { games = r; break; }
+                if (r && Array.isArray(r.games_list)) { games = r.games_list; break; }
+              }catch(e){ /* try next */ }
+            }
+          }
+        }catch(e){
+          console.warn('stratusApi failed', e);
         }
 
-        if (!games){
-          // Fallback sample list with nowgg.fun examples
+        // fallback if no games from stratusApi
+        if (!games || !games.length){
           games = [
             { id:'demo-1', name:'Demo Cloud Game 1', description:'Demo stream (iframe)', streamUrl: 'https://nowgg.fun/embed/demo' },
             { id:'demo-2', name:'Demo Cloud Game 2', description:'Demo WebRTC', streamUrl: 'https://nowgg.fun/stream' },
@@ -125,93 +126,53 @@
       }
 
       async function startGame(game){
-        const server = serverInput.value.replace(/\/$/, '');
-        // Preferred: POST to server to request a stream. Try common endpoints.
-        const startEndpoints = [
-          server + '/cloud/start',
-          server + '/api/cloud/start',
-          server + '/api/start',
-        ];
-
-        let started = null;
-        for (const ep of startEndpoints){
+        // Preferred: use startCloudGame helper from main.js if available. Otherwise use fallback flows.
+        if (typeof startCloudGame === 'function'){
           try{
-            const res = await fetch(ep, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id: game.id})});
-            if (!res.ok) continue;
-            const data = await res.json();
-            started = data; break;
-          }catch(e){ /* ignore */ }
+            // startCloudGame in main.js expects (gameKey, gameName)
+            const key = game.key || game.id || game.slug || game.name;
+            await startCloudGame(key, game.name || game.title || game.id);
+            return;
+          }catch(e){ console.warn('startCloudGame failed', e); }
         }
 
-        // If backend returned a stream URL, open it. Otherwise, try game.streamUrl
-        const streamUrl = (started && (started.streamUrl||started.url)) || game.streamUrl;
+        // If the backend included a streamUrl, attach to video where possible
+        const streamUrl = game.streamUrl || game.url || game.stream || null;
         if (streamUrl){
-          // If it's an mpeg/dash/hls, blob URL, or stream endpoint just set video.src
-          if (streamUrl.endsWith('.mp4') || streamUrl.startsWith('blob:') || streamUrl.startsWith('data:') || streamUrl.includes('/stream')){
+          if (typeof streamUrl === 'string' && (streamUrl.endsWith('.mp4') || streamUrl.startsWith('blob:') || streamUrl.startsWith('data:') || streamUrl.includes('/stream') || streamUrl.includes('/play'))){
             video.src = streamUrl;
             video.play().catch(()=>{});
             return;
           }
-
-          // Many cloud providers like nowgg.fun provide an embeddable page — open in iframe overlay
+          // otherwise open in iframe overlay (webpage that contains embed or signaling)
           openUrlInIframe(streamUrl);
           return;
         }
 
-        // Otherwise, try to trigger WebRTC by opening a signaling connection
-        try{
-          await startWebRTCFlow(server, game);
-        }catch(e){
-          alert('Could not start stream automatically. Open in iframe instead.');
+        // Try using openDirectGame if present (handles iframe-game sources)
+        if (typeof openDirectGame === 'function' && (game.source || game.url || game.key)){
+          try{ await openDirectGame(game.source||'direct', game.name||game.id, game.url||game.stream||game.key); return; }catch(e){ console.warn('openDirectGame failed', e); }
         }
+
+        alert('Could not start stream automatically; try "Open in iframe".');
       }
 
       function openInIframe(game){
-        const url = game.streamUrl || (serverInput.value.replace(/\/$/, '') + '/play/' + encodeURIComponent(game.id));
+        const base = (typeof getStratusBase === 'function') ? getStratusBase() : location.origin;
+        const url = game.streamUrl || game.url || (game.key ? `${base.replace(/\/$/,'')}/play/${encodeURIComponent(game.key)}` : (game.id ? `${base.replace(/\/$/,'')}/play/${encodeURIComponent(game.id)}` : null));
+        if (!url) return alert('No URL available for this game');
         openUrlInIframe(url);
       }
 
       function openUrlInIframe(url){
-        // Simple overlay iframe for nowgg.fun and other providers
         const overlay = document.createElement('div');
-        overlay.style.position='fixed'; overlay.style.inset='0'; overlay.style.zIndex=9999; overlay.style.background='rgba(0,0,0,.85)';
-        overlay.innerHTML = `<div style="position:absolute;inset:30px;border-radius:10px;overflow:hidden;background:#000"><iframe src="${url}" style="width:100%;height:100%;border:0;allow-usb;allow-microphone;allow-camera"></iframe><div style="position:absolute;top:10px;right:10px;cursor:pointer;color:#fff;font-size:24px;background:#333;width:30px;height:30px;display:flex;align-items:center;justify-content:center;border-radius:4px" onclick="document.body.removeChild(this.closest('div').parentNode);">×</div></div>`;
+        overlay.className = 'overlay-backdrop';
+        overlay.innerHTML = `<div class="overlay-iframe"><iframe src="${escapeHtml(url)}" style="width:100%;height:100%;border:0;" allow="autoplay; fullscreen; xr-spatial-tracking; gyroscope; accelerometer;" ></iframe></div>`;
         overlay.addEventListener('click', (e)=>{ if (e.target===overlay) document.body.removeChild(overlay); });
         document.body.appendChild(overlay);
       }
 
-      async function startWebRTCFlow(server, game){
-        // Generic WebRTC offer/answer flow for cloud providers
-        const ep = serverInput.value.replace(/\/$/, '') + '/cloud/webrtc/offer';
-        const res = await fetch(ep, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({id: game.id})});
-        if (!res.ok) throw new Error('no signaling');
-        const data = await res.json();
-        if (!data.sdp || !data.ice) throw new Error('invalid signaling');
-
-        const pc = new RTCPeerConnection();
-        // Attach remote track to video
-        pc.ontrack = (ev)=>{ try{ video.srcObject = ev.streams[0]; }catch(e){} };
-
-        // Add transceivers if needed
-        pc.onicecandidate = (e)=>{
-          if (!e.candidate) return;
-          // Send candidate to server
-          fetch(serverInput.value.replace(/\/$/, '') + '/cloud/webrtc/candidate', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:game.id,candidate:e.candidate})}).catch(()=>{});
-        };
-
-        // Create data channel just in case
-        pc.createDataChannel('opium');
-
-        // Set remote description from server's answer
-        await pc.setRemoteDescription({type:'answer',sdp:data.sdp});
-
-        // If server expects our offer, create one and POST it
-        const offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        await fetch(serverInput.value.replace(/\/$/, '') + '/cloud/webrtc/offer', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:game.id,offer:offer.sdp})});
-
-        return pc;
-      }
+      function escapeHtml(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
       function stopStream(){
         try{
@@ -224,18 +185,17 @@
         }catch(e){}
       }
 
-      // Initial load
-      loadGames();
+      // Start loading once the main script (main.js) has initialized. If stratusApi isn't ready yet, retry a couple times.
+      let tries = 0;
+      const startLoad = () => {
+        if (typeof stratusApi !== 'function' && tries < 20){ tries++; return setTimeout(startLoad, 300); }
+        loadGames();
+      };
+      startLoad();
 
-      // Expose a small API for existing site scripts that expect preStreamVideo
-      window.opiumCloud = {
-        attachStreamToVideo: (srcOrObject)=>{
-          try{
-            if (typeof srcOrObject === 'string') { video.src = srcOrObject; } else { video.srcObject = srcOrObject; }
-          }catch(e){}
-        },
-        stop: stopStream,
-        list: loadGames
+      // expose limited API
+      window.opiumCloudIndex = {
+        refresh: loadGames
       };
     })();
   </script>
